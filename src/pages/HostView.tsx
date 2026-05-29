@@ -77,14 +77,21 @@ export const HostView = () => {
     actionsRef.current.timesUp = newRoom.makeAction('timesUp');
     actionsRef.current.results = newRoom.makeAction('results');
     actionsRef.current.kick = newRoom.makeAction('kick');
+    actionsRef.current.welcome = newRoom.makeAction('welcome');
 
     const getJoin = newRoom.makeAction('join');
     const getSubmitAnswer = newRoom.makeAction('submitAnswer');
 
     getJoin.onMessage = (data: any, { peerId }: { peerId: string }) => {
       setPlayers((prev) => {
-        if (prev.find((p) => p.id === peerId)) return prev;
-        return [...prev, { ...data, id: peerId, score: 0 }];
+        if (prev.find((p) => p.id === peerId)) {
+           // If already known, just confirm with welcome
+           actionsRef.current.welcome.send({ status: 'confirmed' }, peerId);
+           return prev;
+        }
+        const newPlayer = { ...data, id: peerId, score: 0 };
+        actionsRef.current.welcome.send({ status: 'confirmed' }, peerId);
+        return [...prev, newPlayer];
       });
     };
 

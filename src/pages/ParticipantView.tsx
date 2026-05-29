@@ -1,4 +1,4 @@
-import { useState, useRef } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import { joinRoom, selfId } from 'trystero';
 import { LogIn, CheckCircle2, XCircle, Clock, AlertCircle } from 'lucide-react';
 import { Button } from '../components/Button';
@@ -23,11 +23,14 @@ export const ParticipantView = () => {
   const [, setRoom] = useState<any>(null);
   const [currentQuestion, setCurrentQuestion] = useState<Question | null>(null);
   const [lastResult, setLastResult] = useState<{ correct: boolean; score: number } | null>(null);
+  const [isWelcomed, setIsWelcome] = useState(false);
 
   const actionsRef = useRef<{
     join?: any;
     submitAnswer?: any;
   }>({});
+
+  const retryTimerRef = useRef<any>(null);
 
   const handleJoin = () => {
     if (!roomCode) return setError('Bitte gib einen Raum-Code ein.');
@@ -53,6 +56,7 @@ export const ParticipantView = () => {
     const getTimesUp = newRoom.makeAction('timesUp');
     const getResults = newRoom.makeAction('results');
     const getKick = newRoom.makeAction('kick');
+    const getWelcome = newRoom.makeAction('welcome');
 
     getGameStart.onMessage = () => setStatus('waiting');
 
@@ -82,18 +86,30 @@ export const ParticipantView = () => {
       }
     };
 
-    // When a peer joins, send our join info to them as well
+    getWelcome.onMessage = () => {
+       setIsWelcome(true);
+       if (retryTimerRef.current) clearInterval(retryTimerRef.current);
+    };
+
     newRoom.onPeerJoin = (peerId: string) => {
       console.log('Peer joined:', peerId);
       actionsRef.current.join?.send({ name, avatar }, peerId);
     };
 
-    // Initial broadcast after a small delay to allow connections
-    setTimeout(() => {
-      actionsRef.current.join?.send({ name, avatar });
-      setStatus('waiting');
+    setStatus('waiting');
+
+    // Start a retry loop to ensure the host sees us
+    if (retryTimerRef.current) clearInterval(retryTimerRef.current);
+    retryTimerRef.current = setInterval(() => {
+        actionsRef.current.join?.send({ name, avatar });
     }, 2000);
   };
+
+  useEffect(() => {
+    return () => {
+      if (retryTimerRef.current) clearInterval(retryTimerRef.current);
+    };
+  }, []);
 
   const handleAnswer = (index: number) => {
     if (status !== 'question') return;
@@ -157,7 +173,11 @@ export const ParticipantView = () => {
       <div className="container mx-auto px-4 py-12 text-center">
         <div className="animate-bounce text-6xl mb-6">{avatar}</div>
         <h2 className="text-2xl font-bold mb-2">Hallo {name}!</h2>
-        <p className="text-gray-500">Du bist in der Lobby. Warte auf den Start durch die*den Hostende*n...</p>
+        <p className="text-gray-500">
+            {isWelcomed
+                ? 'Du bist in der Lobby. Warte auf den Start durch die*den Hostende*n...'
+                : 'Verbindung wird hergestellt...'}
+        </p>
       </div>
     );
   }
