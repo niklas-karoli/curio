@@ -116,7 +116,7 @@ export const HostView = () => {
       alert('Warte auf Teilnehmende...');
       return;
     }
-    actionsRef.current.gameStart?.send({}, null);
+    actionsRef.current.gameStart?.send({});
     startNextQuestion(0);
   };
 
@@ -126,7 +126,7 @@ export const HostView = () => {
     setAnswersReceived({});
     setRemainingTime(question.timeLimit);
     setGameStatus('question');
-    actionsRef.current.nextQuestion?.send(question, null);
+    actionsRef.current.nextQuestion?.send(question);
 
     if (timerRef.current) clearInterval(timerRef.current);
     timerRef.current = setInterval(() => {
@@ -147,7 +147,7 @@ export const HostView = () => {
   }, [remainingTime, gameStatus]);
 
   const finishQuestion = () => {
-    actionsRef.current.timesUp?.send({}, null);
+    actionsRef.current.timesUp?.send({});
     setGameStatus('result');
 
     setPlayers((prevPlayers) => {
@@ -166,7 +166,7 @@ export const HostView = () => {
   useEffect(() => {
     if (gameStatus === 'result') {
       const sorted = [...players].sort((a, b) => b.score - a.score);
-      actionsRef.current.results?.send(sorted, null);
+      actionsRef.current.results?.send(sorted);
     }
   }, [players, gameStatus]);
 
@@ -179,7 +179,7 @@ export const HostView = () => {
   };
 
   const kickPlayer = (id: string) => {
-    actionsRef.current.kick?.send(id, id);
+    actionsRef.current.kick?.send(id);
     setPlayers((prev) => prev.filter((p) => p.id !== id));
   };
 

@@ -82,16 +82,23 @@ export const ParticipantView = () => {
       }
     };
 
+    // When a peer joins, send our join info to them as well
+    newRoom.onPeerJoin = (peerId: string) => {
+      console.log('Peer joined:', peerId);
+      actionsRef.current.join?.send({ name, avatar }, peerId);
+    };
+
+    // Initial broadcast after a small delay to allow connections
     setTimeout(() => {
-      actionsRef.current.join?.send({ name, avatar }, null);
+      actionsRef.current.join?.send({ name, avatar });
       setStatus('waiting');
-    }, 1000);
+    }, 2000);
   };
 
   const handleAnswer = (index: number) => {
     if (status !== 'question') return;
     const timestamp = Date.now();
-    actionsRef.current.submitAnswer?.send({ answerIndex: index, timestamp }, null);
+    actionsRef.current.submitAnswer?.send({ answerIndex: index, timestamp });
     setStatus('answered');
   };
 
