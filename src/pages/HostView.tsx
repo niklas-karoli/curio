@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { joinRoom } from 'trystero';
+import mqtt from 'mqtt';
 import { Upload, Users, Play, X, Trophy } from 'lucide-react';
 import { Button } from '../components/Button';
 import { Card } from '../components/Card';
@@ -7,12 +7,12 @@ import type { Quiz, Player } from '../types';
 import { calculateScore } from '../utils/scoring';
 import { cn } from '../utils/cn';
 
-const config = { appId: 'curio-quiz-p2p' };
+// Nutzt den performanten HiveMQ Cloud Broker (Free Tier) über verschlüsselte WebSockets
+const BROKER_URL = 'wss://broker.hivemq.com:8004/mqtt';
 
 export const HostView = () => {
   const [quiz, setQuiz] = useState<Quiz | null>(null);
   const [roomCode, setRoomCode] = useState<string>('');
-  const [, setRoom] = useState<any>(null);
   const [players, setPlayers] = useState<Player[]>([]);
   const [gameStatus, setGameStatus] = useState<'upload' | 'lobby' | 'question' | 'result' | 'podium'>('upload');
   const [currentQuestionIndex, setCurrentQuestionIndex] = useState(0);
@@ -23,19 +23,16 @@ export const HostView = () => {
   const remainingTimeRef = useRef<number>(0);
   const currentQuestionIndexRef = useRef<number>(0);
   const quizRef = useRef<Quiz | null>(null);
-  const actionsRef = useRef<any>({});
+  const answersReceivedRef = useRef<Record<string, { optionIndex: number; points: number }>>({});
 
-  useEffect(() => {
-    remainingTimeRef.current = remainingTime;
-  }, [remainingTime]);
+  // MQTT Client-Referenz
+  const clientRef = useRef<mqtt.MqttClient | null>(null);
 
-  useEffect(() => {
-    currentQuestionIndexRef.current = currentQuestionIndex;
-  }, [currentQuestionIndex]);
-
-  useEffect(() => {
-    quizRef.current = quiz;
-  }, [quiz]);
+  // Synchronisation der Refs, um Closures innerhalb der MQTT-Callbacks frisch zu halten
+  useEffect(() => { remainingTimeRef.current = remainingTime; }, [remainingTime]);
+  useEffect(() => { currentQuestionIndexRef.current = currentQuestionIndex; }, [currentQuestionIndex]);
+  useEffect(() => { quizRef.current = quiz; }, [quiz]);
+  useEffect(() => { answersReceivedRef.current = answersReceived; }, [answersReceived]);
 
   useEffect(() => {
     const handleBeforeUnload = (e: BeforeUnloadEvent) => {
@@ -48,6 +45,14 @@ export const HostView = () => {
     return () => window.removeEventListener('beforeunload', handleBeforeUnload);
   }, [gameStatus]);
 
+  // Cleanup bei Unmount
+  useEffect(() => {
+    return () => {
+      if (timerRef.current) clearInterval(timerRef.current);
+      if (clientRef.current) clientRef.current.end();
+    };
+  }, []);
+
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -57,7 +62,7 @@ export const HostView = () => {
       try {
         const json = JSON.parse(event.target?.result as string);
         setQuiz(json);
-        initRoom();
+        initMQTT();
       } catch (err) {
         alert('Ungültige Quiz-Datei.');
       }
@@ -65,57 +70,78 @@ export const HostView = () => {
     reader.readAsText(file);
   };
 
-  const initRoom = () => {
+  const initMQTT = () => {
     const code = Math.random().toString(36).substring(2, 8).toUpperCase();
     setRoomCode(code);
-    const newRoom = joinRoom(config, code);
-    setRoom(newRoom);
     setGameStatus('lobby');
 
-    actionsRef.current.gameStart = newRoom.makeAction('gameStart');
-    actionsRef.current.nextQuestion = newRoom.makeAction('nextQuestion');
-    actionsRef.current.timesUp = newRoom.makeAction('timesUp');
-    actionsRef.current.results = newRoom.makeAction('results');
-    actionsRef.current.kick = newRoom.makeAction('kick');
-    actionsRef.current.welcome = newRoom.makeAction('welcome');
+    // Aggressive Reconnect- und Keepalive-Kofiguration für instabile Schul-WLANs
+    const client = mqtt.connect(BROKER_URL, {
+      keepalive: 30,
+      reconnectPeriod: 2000,
+      connectTimeout: 5000,
+      clientId: `curio_host_${Math.random().toString(16).substring(2, 10)}`
+    });
 
-    const getJoin = newRoom.makeAction('join');
-    const getSubmitAnswer = newRoom.makeAction('submitAnswer');
+    clientRef.current = client;
 
-    getJoin.onMessage = (data: any, { peerId }: { peerId: string }) => {
-      setPlayers((prev) => {
-        if (prev.find((p) => p.id === peerId)) {
-           // If already known, just confirm with welcome
-           actionsRef.current.welcome.send({ status: 'confirmed' }, peerId);
-           return prev;
+    client.on('connect', () => {
+      // Höre auf die Topics der Teilnehmenden (Inbound)
+      client.subscribe(`curio/${code}/join`, { qos: 0 });
+      client.subscribe(`curio/${code}/submitAnswer`, { qos: 0 });
+    });
+
+    client.on('message', (topic, message) => {
+      try {
+        const payload = JSON.parse(message.toString());
+        const { peerId, data } = payload;
+
+        if (topic === `curio/${code}/join`) {
+          setPlayers((prev) => {
+            if (prev.find((p) => p.id === peerId)) {
+              // Bestätigung für Nachzügler*innen / Reconnects
+              sendAction('welcome', { status: 'confirmed' }, peerId);
+              return prev;
+            }
+            const newPlayer = { ...data, id: peerId, score: 0 };
+            sendAction('welcome', { status: 'confirmed' }, peerId);
+            return [...prev, newPlayer];
+          });
         }
-        const newPlayer = { ...data, id: peerId, score: 0 };
-        actionsRef.current.welcome.send({ status: 'confirmed' }, peerId);
-        return [...prev, newPlayer];
-      });
-    };
 
-    getSubmitAnswer.onMessage = (data: any, { peerId }: { peerId: string }) => {
-      const qIndex = currentQuestionIndexRef.current;
-      const currentQuiz = quizRef.current;
-      if (!currentQuiz) return;
+        if (topic === `curio/${code}/submitAnswer`) {
+          const qIndex = currentQuestionIndexRef.current;
+          const currentQuiz = quizRef.current;
+          if (!currentQuiz) return;
 
-      const question = currentQuiz.questions[qIndex];
-      let points = 0;
+          const question = currentQuiz.questions[qIndex];
+          let points = 0;
 
-      if (data.answerIndex === question.correctAnswerIndex) {
-        points = calculateScore(remainingTimeRef.current, question.timeLimit);
+          if (data.answerIndex === question.correctAnswerIndex) {
+            points = calculateScore(remainingTimeRef.current, question.timeLimit);
+          }
+
+          setAnswersReceived((prev) => ({
+            ...prev,
+            [peerId]: { optionIndex: data.answerIndex, points },
+          }));
+        }
+      } catch (err) {
+        console.error('Fehler beim Verarbeiten der MQTT-Nachricht:', err);
       }
+    });
+  };
 
-      setAnswersReceived((prev) => ({
-        ...prev,
-        [peerId]: { optionIndex: data.answerIndex, points },
-      }));
-    };
-
-    newRoom.onPeerLeave = (peerId: string) => {
-      setPlayers((prev) => prev.filter((p) => p.id !== peerId));
-    };
+  // Hilfsfunktion zum Senden von Outbound-Events mit qos: 0 und retain: false für maximale Performance
+  const sendAction = (actionType: string, payload: any, targetPeerId?: string) => {
+    if (!clientRef.current || !roomCode) return;
+    const topic = `curio/${roomCode}/${actionType}`;
+    const message = JSON.stringify({
+      targetPeerId, // Wenn gesetzt, reagiert nur die spezifische Person darauf
+      data: payload,
+      timestamp: Date.now()
+    });
+    clientRef.current.publish(topic, message, { qos: 0, retain: false });
   };
 
   const startGame = () => {
@@ -123,7 +149,7 @@ export const HostView = () => {
       alert('Warte auf Teilnehmende...');
       return;
     }
-    actionsRef.current.gameStart?.send({});
+    sendAction('gameStart', {});
     startNextQuestion(0);
   };
 
@@ -133,7 +159,7 @@ export const HostView = () => {
     setAnswersReceived({});
     setRemainingTime(question.timeLimit);
     setGameStatus('question');
-    actionsRef.current.nextQuestion?.send(question);
+    sendAction('nextQuestion', question);
 
     if (timerRef.current) clearInterval(timerRef.current);
     timerRef.current = setInterval(() => {
@@ -154,12 +180,13 @@ export const HostView = () => {
   }, [remainingTime, gameStatus]);
 
   const finishQuestion = () => {
-    actionsRef.current.timesUp?.send({});
+    sendAction('timesUp', {});
     setGameStatus('result');
 
     setPlayers((prevPlayers) => {
+      const currentAnswers = answersReceivedRef.current;
       const updated = prevPlayers.map((player) => {
-        const answer = answersReceived[player.id];
+        const answer = currentAnswers[player.id];
         return {
           ...player,
           score: player.score + (answer?.points || 0),
@@ -173,7 +200,7 @@ export const HostView = () => {
   useEffect(() => {
     if (gameStatus === 'result') {
       const sorted = [...players].sort((a, b) => b.score - a.score);
-      actionsRef.current.results?.send(sorted);
+      sendAction('results', sorted);
     }
   }, [players, gameStatus]);
 
@@ -186,7 +213,7 @@ export const HostView = () => {
   };
 
   const kickPlayer = (id: string) => {
-    actionsRef.current.kick?.send(id);
+    sendAction('kick', {}, id);
     setPlayers((prev) => prev.filter((p) => p.id !== id));
   };
 
@@ -346,7 +373,7 @@ export const HostView = () => {
         <h1 className="text-5xl font-black mb-12">Endergebnis</h1>
 
         <div className="grid grid-cols-1 md:grid-cols-3 gap-8 w-full max-w-4xl items-end mb-12">
-          {/* 2nd Place */}
+          {/* 2. Platz */}
           {winners[1] && (
             <div className="flex flex-col items-center order-2 md:order-1">
               <span className="text-4xl mb-2">{winners[1].avatar}</span>
@@ -358,7 +385,7 @@ export const HostView = () => {
             </div>
           )}
 
-          {/* 1st Place */}
+          {/* 1. Platz */}
           {winners[0] && (
             <div className="flex flex-col items-center order-1 md:order-2">
               <span className="text-6xl mb-2 animate-bounce">👑</span>
@@ -371,7 +398,7 @@ export const HostView = () => {
             </div>
           )}
 
-          {/* 3rd Place */}
+          {/* 3. Platz */}
           {winners[2] && (
             <div className="flex flex-col items-center order-3 md:order-3">
               <span className="text-4xl mb-2">{winners[2].avatar}</span>

@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from 'react';
-import { joinRoom, selfId } from 'trystero';
+import mqtt from 'mqtt';
 import { LogIn, CheckCircle2, XCircle, Clock, AlertCircle } from 'lucide-react';
 import { Button } from '../components/Button';
 import { Card } from '../components/Card';
@@ -9,10 +9,9 @@ import type { Player, Question } from '../types';
 import { isProfane } from '../utils/profanityFilter';
 import { cn } from '../utils/cn';
 
-const config = { appId: 'curio-quiz-p2p' };
+const BROKER_URL = 'wss://broker.hivemq.com:8004/mqtt';
 
 export const ParticipantView = () => {
-  // Try to recover state from sessionStorage
   const savedData = JSON.parse(sessionStorage.getItem('curio-player') || '{}');
 
   const [roomCode, setRoomCode] = useState(savedData.roomCode || '');
@@ -20,104 +19,134 @@ export const ParticipantView = () => {
   const [avatar, setAvatar] = useState(savedData.avatar || '🐶');
   const [error, setError] = useState('');
   const [status, setStatus] = useState<'join' | 'waiting' | 'question' | 'answered' | 'result' | 'kicked'>('join');
-  const [, setRoom] = useState<any>(null);
   const [currentQuestion, setCurrentQuestion] = useState<Question | null>(null);
   const [lastResult, setLastResult] = useState<{ correct: boolean; score: number } | null>(null);
   const [isWelcomed, setIsWelcome] = useState(false);
 
-  const actionsRef = useRef<{
-    join?: any;
-    submitAnswer?: any;
-  }>({});
+  // Eindeutige ID für dieses Gerät generieren/behalten
+  const peerIdRef = useRef<string>(
+    savedData.peerId || `client_${Math.random().toString(16).substring(2, 10)}`
+  );
+  const clientRef = useRef<mqtt.MqttClient | null>(null);
+  const statusRef = useRef<string>('join');
 
-  const retryTimerRef = useRef<any>(null);
+  useEffect(() => {
+    statusRef.current = status;
+  }, [status]);
+
+  // Cleanup bei Unmount
+  useEffect(() => {
+    return () => {
+      if (clientRef.current) clientRef.current.end();
+    };
+  }, []);
 
   const handleJoin = () => {
     if (!roomCode) return setError('Bitte gib einen Raum-Code ein.');
     if (!name) return setError('Bitte gib deinen Namen ein.');
     if (isProfane(name)) return setError('Dieser Name ist leider nicht erlaubt.');
 
-    // Save to session storage for reconnection
-    sessionStorage.setItem('curio-player', JSON.stringify({ name, avatar, roomCode: roomCode.toUpperCase() }));
+    const cleanCode = roomCode.toUpperCase();
+    const myId = peerIdRef.current;
 
-    const newRoom = joinRoom(config, roomCode.toUpperCase());
-    setRoom(newRoom);
+    sessionStorage.setItem(
+      'curio-player',
+      JSON.stringify({ name, avatar, roomCode: cleanCode, peerId: myId })
+    );
 
-    const sendJoin = newRoom.makeAction('join');
-    const sendSubmitAnswer = newRoom.makeAction('submitAnswer');
+    // Verbindung zum performanten Cloud-Broker aufbauen
+    const client = mqtt.connect(BROKER_URL, {
+      keepalive: 30,
+      reconnectPeriod: 2000,
+      connectTimeout: 5000,
+      clientId: `curio_client_${myId}`
+    });
 
-    actionsRef.current = {
-      join: sendJoin,
-      submitAnswer: sendSubmitAnswer,
-    };
-
-    const getGameStart = newRoom.makeAction('gameStart');
-    const getNextQuestion = newRoom.makeAction('nextQuestion');
-    const getTimesUp = newRoom.makeAction('timesUp');
-    const getResults = newRoom.makeAction('results');
-    const getKick = newRoom.makeAction('kick');
-    const getWelcome = newRoom.makeAction('welcome');
-
-    getGameStart.onMessage = () => setStatus('waiting');
-
-    getNextQuestion.onMessage = (q: any) => {
-      setCurrentQuestion(q as Question);
-      setStatus('question');
-    };
-
-    getTimesUp.onMessage = () => {
-      if (status !== 'answered') {
-        setStatus('result');
-      }
-    };
-
-    getResults.onMessage = (players: any) => {
-      const me = (players as Player[]).find(p => p.name === name && p.avatar === avatar);
-      if (me) {
-        setLastResult({ correct: !!me.lastAnswerCorrect, score: me.score });
-      }
-      setStatus('result');
-    };
-
-    getKick.onMessage = (kickedId: any) => {
-      if (kickedId === selfId) {
-        setStatus('kicked');
-        sessionStorage.removeItem('curio-player');
-      }
-    };
-
-    getWelcome.onMessage = () => {
-       setIsWelcome(true);
-       if (retryTimerRef.current) clearInterval(retryTimerRef.current);
-    };
-
-    newRoom.onPeerJoin = (peerId: string) => {
-      console.log('Peer joined:', peerId);
-      actionsRef.current.join?.send({ name, avatar }, peerId);
-    };
-
+    clientRef.current = client;
     setStatus('waiting');
 
-    // Start a retry loop to ensure the host sees us
-    if (retryTimerRef.current) clearInterval(retryTimerRef.current);
-    retryTimerRef.current = setInterval(() => {
-        actionsRef.current.join?.send({ name, avatar });
-    }, 2000);
+    client.on('connect', () => {
+      // Relevante Host-Kanäle abonnieren
+      client.subscribe(`curio/${cleanCode}/gameStart`, { qos: 0 });
+      client.subscribe(`curio/${cleanCode}/nextQuestion`, { qos: 0 });
+      client.subscribe(`curio/${cleanCode}/timesUp`, { qos: 0 });
+      client.subscribe(`curio/${cleanCode}/results`, { qos: 0 });
+      client.subscribe(`curio/${cleanCode}/kick`, { qos: 0 });
+      client.subscribe(`curio/${cleanCode}/welcome`, { qos: 0 });
+
+      // Dem Host direkt signalisieren, dass wir da sind
+      const joinPayload = {
+        peerId: myId,
+        data: { name, avatar }
+      };
+      client.publish(`curio/${cleanCode}/join`, JSON.stringify(joinPayload), { qos: 0, retain: false });
+    });
+
+    client.on('message', (topic, message) => {
+      try {
+        const payload = JSON.parse(message.toString());
+        const { targetPeerId, data } = payload;
+
+        // Falls die Nachricht an einen spezifischen Client gerichtet ist, filtern
+        if (targetPeerId && targetPeerId !== myId) return;
+
+        if (topic.endsWith('/welcome')) {
+          setIsWelcome(true);
+        }
+
+        if (topic.endsWith('/gameStart')) {
+          setStatus('waiting');
+        }
+
+        if (topic.endsWith('/nextQuestion')) {
+          setCurrentQuestion(data as Question);
+          setStatus('question');
+        }
+
+        if (topic.endsWith('/timesUp')) {
+          if (statusRef.current !== 'answered') {
+            setStatus('result');
+          }
+        }
+
+        if (topic.endsWith('/results')) {
+          const players = data as Player[];
+          const me = players.find((p) => p.id === myId);
+          if (me) {
+            setLastResult({ correct: !!me.lastAnswerCorrect, score: me.score });
+          }
+          setStatus('result');
+        }
+
+        if (topic.endsWith('/kick')) {
+          setStatus('kicked');
+          sessionStorage.removeItem('curio-player');
+          if (clientRef.current) clientRef.current.end();
+        }
+      } catch (err) {
+        console.error('Fehler bei der Nachrichtenverarbeitung:', err);
+      }
+    });
   };
 
-  useEffect(() => {
-    return () => {
-      if (retryTimerRef.current) clearInterval(retryTimerRef.current);
-    };
-  }, []);
-
   const handleAnswer = (index: number) => {
-    if (status !== 'question') return;
-    const timestamp = Date.now();
-    actionsRef.current.submitAnswer?.send({ answerIndex: index, timestamp });
+    if (status !== 'question' || !clientRef.current) return;
+
+    const answerPayload = {
+      peerId: peerIdRef.current,
+      data: { answerIndex: index }
+    };
+
+    clientRef.current.publish(
+      `curio/${roomCode.toUpperCase()}/submitAnswer`,
+      JSON.stringify(answerPayload),
+      { qos: 0, retain: false }
+    );
+
     setStatus('answered');
   };
 
+  // --- UI-Komponenten bleiben identisch mit Jules Version ---
   if (status === 'kicked') {
     return (
       <div className="container mx-auto px-4 py-24 text-center">
@@ -174,9 +203,9 @@ export const ParticipantView = () => {
         <div className="animate-bounce text-6xl mb-6">{avatar}</div>
         <h2 className="text-2xl font-bold mb-2">Hallo {name}!</h2>
         <p className="text-gray-500">
-            {isWelcomed
-                ? 'Du bist in der Lobby. Warte auf den Start durch die*den Hostende*n...'
-                : 'Verbindung wird hergestellt...'}
+          {isWelcomed
+            ? 'Du bist in der Lobby. Warte auf den Start durch die*den Hostende*n...'
+            : 'Verbindung wird hergestellt...'}
         </p>
       </div>
     );
@@ -186,7 +215,7 @@ export const ParticipantView = () => {
     return (
       <div className="h-[calc(100vh-4rem)] flex flex-col p-4 gap-4">
         <div className="text-center py-4 bg-white rounded-2xl shadow-sm border border-gray-50">
-           <h2 className="text-xl font-bold px-4">{currentQuestion.questionText}</h2>
+          <h2 className="text-xl font-bold px-4">{currentQuestion.questionText}</h2>
         </div>
 
         <div className="flex-1 grid grid-cols-2 gap-4">

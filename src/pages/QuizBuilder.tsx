@@ -82,13 +82,20 @@ export const QuizBuilder = () => {
       return;
     }
 
-    // Clean up empty options before export
+    // Clean up empty options and remap correct answer index before export
     const cleanQuiz = {
       ...quiz,
-      questions: quiz.questions.map(q => ({
-        ...q,
-        options: q.options.filter(opt => opt.trim() !== '')
-      }))
+      questions: quiz.questions.map(q => {
+        const correctText = q.options[q.correctAnswerIndex];
+        const cleanOptions = q.options.filter(opt => opt.trim() !== '');
+        const newCorrectIndex = cleanOptions.indexOf(correctText);
+
+        return {
+          ...q,
+          options: cleanOptions,
+          correctAnswerIndex: newCorrectIndex
+        };
+      })
     };
 
     const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(cleanQuiz, null, 2));
