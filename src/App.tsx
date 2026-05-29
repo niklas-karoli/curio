@@ -1,4 +1,4 @@
-import { HashRouter as Router, Routes, Route } from 'react-router-dom';
+import { HashRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
 import { Navbar } from './components/Navbar';
 import { Home } from './pages/Home';
 import { QuizBuilder } from './pages/QuizBuilder';
@@ -16,6 +16,7 @@ function App() {
             <Route path="/builder" element={<QuizBuilder />} />
             <Route path="/host" element={<HostView />} />
             <Route path="/play" element={<ParticipantView />} />
+            <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
         </main>
       </div>

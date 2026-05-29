@@ -17,33 +17,25 @@ export const HostView = () => {
   const [gameStatus, setGameStatus] = useState<'upload' | 'lobby' | 'question' | 'result' | 'podium'>('upload');
   const [currentQuestionIndex, setCurrentQuestionIndex] = useState(0);
   const [remainingTime, setRemainingTime] = useState(0);
-  const [answersReceived, setAnswersReceived] = useState<Record<string, { optionIndex: number; time: number }>>({});
+  const [answersReceived, setAnswersReceived] = useState<Record<string, { optionIndex: number; points: number }>>({});
 
   const timerRef = useRef<any>(null);
-  const playersRef = useRef<Player[]>([]);
-  const answersReceivedRef = useRef<Record<string, { optionIndex: number; time: number }>>({});
   const remainingTimeRef = useRef<number>(0);
-
-  // Actions
-  const actionsRef = useRef<{
-    gameStart?: any;
-    nextQuestion?: any;
-    timesUp?: any;
-    results?: any;
-    kick?: any;
-  }>({});
-
-  useEffect(() => {
-    playersRef.current = players;
-  }, [players]);
-
-  useEffect(() => {
-    answersReceivedRef.current = answersReceived;
-  }, [answersReceived]);
+  const currentQuestionIndexRef = useRef<number>(0);
+  const quizRef = useRef<Quiz | null>(null);
+  const actionsRef = useRef<any>({});
 
   useEffect(() => {
     remainingTimeRef.current = remainingTime;
   }, [remainingTime]);
+
+  useEffect(() => {
+    currentQuestionIndexRef.current = currentQuestionIndex;
+  }, [currentQuestionIndex]);
+
+  useEffect(() => {
+    quizRef.current = quiz;
+  }, [quiz]);
 
   useEffect(() => {
     const handleBeforeUnload = (e: BeforeUnloadEvent) => {
@@ -80,19 +72,11 @@ export const HostView = () => {
     setRoom(newRoom);
     setGameStatus('lobby');
 
-    const sendGameStart = newRoom.makeAction('gameStart');
-    const sendNextQuestion = newRoom.makeAction('nextQuestion');
-    const sendTimesUp = newRoom.makeAction('timesUp');
-    const sendResults = newRoom.makeAction('results');
-    const sendKick = newRoom.makeAction('kick');
-
-    actionsRef.current = {
-      gameStart: sendGameStart,
-      nextQuestion: sendNextQuestion,
-      timesUp: sendTimesUp,
-      results: sendResults,
-      kick: sendKick,
-    };
+    actionsRef.current.gameStart = newRoom.makeAction('gameStart');
+    actionsRef.current.nextQuestion = newRoom.makeAction('nextQuestion');
+    actionsRef.current.timesUp = newRoom.makeAction('timesUp');
+    actionsRef.current.results = newRoom.makeAction('results');
+    actionsRef.current.kick = newRoom.makeAction('kick');
 
     const getJoin = newRoom.makeAction('join');
     const getSubmitAnswer = newRoom.makeAction('submitAnswer');
@@ -105,13 +89,21 @@ export const HostView = () => {
     };
 
     getSubmitAnswer.onMessage = (data: any, { peerId }: { peerId: string }) => {
-      setAnswersReceived((prev) => {
-        const updated = {
-          ...prev,
-          [peerId]: { optionIndex: data.answerIndex, time: data.timestamp },
-        };
-        return updated;
-      });
+      const qIndex = currentQuestionIndexRef.current;
+      const currentQuiz = quizRef.current;
+      if (!currentQuiz) return;
+
+      const question = currentQuiz.questions[qIndex];
+      let points = 0;
+
+      if (data.answerIndex === question.correctAnswerIndex) {
+        points = calculateScore(remainingTimeRef.current, question.timeLimit);
+      }
+
+      setAnswersReceived((prev) => ({
+        ...prev,
+        [peerId]: { optionIndex: data.answerIndex, points },
+      }));
     };
 
     newRoom.onPeerLeave = (peerId: string) => {
@@ -141,7 +133,6 @@ export const HostView = () => {
       setRemainingTime((prev) => {
         if (prev <= 1) {
           clearInterval(timerRef.current);
-          handleTimesUp(index);
           return 0;
         }
         return prev - 1;
@@ -149,35 +140,35 @@ export const HostView = () => {
     }, 1000);
   };
 
-  const handleTimesUp = (qIndex: number) => {
+  useEffect(() => {
+    if (remainingTime === 0 && gameStatus === 'question') {
+      finishQuestion();
+    }
+  }, [remainingTime, gameStatus]);
+
+  const finishQuestion = () => {
     actionsRef.current.timesUp?.send({}, null);
     setGameStatus('result');
 
-    const question = quiz!.questions[qIndex];
-    // Use the functional update to get the latest state of players and then use the refs for answers and remainingTime
     setPlayers((prevPlayers) => {
-      const updatedPlayers = prevPlayers.map((player) => {
-        const answer = answersReceivedRef.current[player.id];
-        let correct = false;
-        let points = 0;
-
-        if (answer && answer.optionIndex === question.correctAnswerIndex) {
-          correct = true;
-          points = calculateScore(remainingTimeRef.current, question.timeLimit);
-        }
-
+      const updated = prevPlayers.map((player) => {
+        const answer = answersReceived[player.id];
         return {
           ...player,
-          score: player.score + points,
-          lastAnswerCorrect: correct,
+          score: player.score + (answer?.points || 0),
+          lastAnswerCorrect: (answer?.points || 0) > 0,
         };
       });
-
-      const sorted = [...updatedPlayers].sort((a, b) => b.score - a.score);
-      actionsRef.current.results?.send(sorted, null);
-      return sorted;
+      return updated;
     });
   };
+
+  useEffect(() => {
+    if (gameStatus === 'result') {
+      const sorted = [...players].sort((a, b) => b.score - a.score);
+      actionsRef.current.results?.send(sorted, null);
+    }
+  }, [players, gameStatus]);
 
   const nextAction = () => {
     if (currentQuestionIndex < quiz!.questions.length - 1) {
