@@ -1,0 +1,12 @@
+@import "tailwindcss";
+
+@theme {
+  --color-primary: #86efac; /* sanftes Hellgrün */
+  --color-secondary: #93c5fd; /* sanftes Hellblau */
+  --color-background: #f9fafb; /* neutrales Hellgrau */
+  --color-text-dark: #1f2937; /* dunkle Schrift */
+}
+
+body {
+  @apply bg-background text-text-dark font-sans;
+}
