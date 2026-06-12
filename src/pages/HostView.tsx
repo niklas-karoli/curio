@@ -86,7 +86,7 @@ export const HostView = () => {
       clean: true,
       keepalive: 30,
       reconnectPeriod: 2000,
-      clientId: `curio_host_${Math.random().toString(36).substring(2, 9)}`
+      clientId: `curio_host_${peerId}`
     });
 
     clientRef.current = client;
