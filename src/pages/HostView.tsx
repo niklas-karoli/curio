@@ -7,8 +7,8 @@ import type { Quiz, Player } from '../types';
 import { calculateScore } from '../utils/scoring';
 import { cn } from '../utils/cn';
 
-// Nutzt den performanten HiveMQ Cloud Broker (Free Tier) über verschlüsselte WebSockets
-const BROKER_URL = 'wss://broker.hivemq.com:8004/mqtt';
+const BROKER_URL = 'wss://realtime.ably.io:443';
+const ABLY_API_KEY = import.meta.env.VITE_ABLY_API_KEY;
 
 export const HostView = () => {
   const [quiz, setQuiz] = useState<Quiz | null>(null);
@@ -75,20 +75,25 @@ export const HostView = () => {
     setRoomCode(code);
     setGameStatus('lobby');
 
+    const peerId = Math.random().toString(16).substring(2, 10);
+
     // Aggressive Reconnect- und Keepalive-Kofiguration für instabile Schul-WLANs
     const client = mqtt.connect(BROKER_URL, {
+      username: ABLY_API_KEY,
+      password: '',
+      clean: true,
       keepalive: 30,
       reconnectPeriod: 2000,
       connectTimeout: 5000,
-      clientId: `curio_host_${Math.random().toString(16).substring(2, 10)}`
+      clientId: `curio_host_${peerId}`
     });
 
     clientRef.current = client;
 
     client.on('connect', () => {
       // Höre auf die Topics der Teilnehmenden (Inbound)
-      client.subscribe(`curio/${code}/join`, { qos: 0 });
-      client.subscribe(`curio/${code}/submitAnswer`, { qos: 0 });
+      client.subscribe(`channels/curio:${code}/join`, { qos: 0 });
+      client.subscribe(`channels/curio:${code}/submitAnswer`, { qos: 0 });
     });
 
     client.on('message', (topic, message) => {
@@ -96,7 +101,7 @@ export const HostView = () => {
         const payload = JSON.parse(message.toString());
         const { peerId, data } = payload;
 
-        if (topic === `curio/${code}/join`) {
+        if (topic === `channels/curio:${code}/join`) {
           setPlayers((prev) => {
             if (prev.find((p) => p.id === peerId)) {
               // Bestätigung für Nachzügler*innen / Reconnects
@@ -109,7 +114,7 @@ export const HostView = () => {
           });
         }
 
-        if (topic === `curio/${code}/submitAnswer`) {
+        if (topic === `channels/curio:${code}/submitAnswer`) {
           const qIndex = currentQuestionIndexRef.current;
           const currentQuiz = quizRef.current;
           if (!currentQuiz) return;
@@ -135,7 +140,7 @@ export const HostView = () => {
   // Hilfsfunktion zum Senden von Outbound-Events mit qos: 0 und retain: false für maximale Performance
   const sendAction = (actionType: string, payload: any, targetPeerId?: string) => {
     if (!clientRef.current || !roomCode) return;
-    const topic = `curio/${roomCode}/${actionType}`;
+    const topic = `channels/curio:${roomCode}/${actionType}`;
     const message = JSON.stringify({
       targetPeerId, // Wenn gesetzt, reagiert nur die spezifische Person darauf
       data: payload,
