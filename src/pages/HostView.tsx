@@ -7,7 +7,7 @@ import type { Quiz, Player } from '../types';
 import { calculateScore } from '../utils/scoring';
 import { cn } from '../utils/cn';
 
-const BROKER_URL = 'wss://realtime.ably.io:443';
+const BROKER_URL = 'wss://realtime.ably.io:443/mqtt';
 const ABLY_API_KEY = import.meta.env.VITE_ABLY_API_KEY;
 
 export const HostView = () => {
@@ -84,6 +84,7 @@ export const HostView = () => {
       username: ABLY_API_KEY,
       password: '',
       clean: true,
+      format: 'json',
       keepalive: 30,
       reconnectPeriod: 2000,
       clientId: `curio_host_${peerId}`
