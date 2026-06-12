@@ -57,6 +57,7 @@ export const ParticipantView = () => {
 
     // Verbindung zum performanten Cloud-Broker aufbauen
     const client = mqtt.connect(BROKER_URL, {
+      protocol: 'wss',
       username: ABLY_API_KEY,
       password: '',
       clean: true,
