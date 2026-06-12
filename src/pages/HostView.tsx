@@ -79,15 +79,16 @@ export const HostView = () => {
 
     // Aggressive Reconnect- und Keepalive-Kofiguration für instabile Schul-WLANs
     const client = mqtt.connect(BROKER_URL, {
-      protocol: 'wss',
-      path: '/mqtt',
       username: ABLY_API_KEY,
       password: '',
       clean: true,
       format: 'json',
       keepalive: 30,
       reconnectPeriod: 2000,
-      clientId: `curio_host_${peerId}`
+      clientId: `curio_host_${peerId}`,
+      wsOptions: {
+    binaryType: 'string'
+      }
     } as any);
 
     clientRef.current = client;
