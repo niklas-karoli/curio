@@ -9,7 +9,7 @@ import type { Player, Question } from '../types';
 import { isProfane } from '../utils/profanityFilter';
 import { cn } from '../utils/cn';
 
-const BROKER_URL = 'wss://realtime.ably.io:443';
+const BROKER_URL = 'wss://realtime.ably.io:443/mqtt';
 const ABLY_API_KEY = import.meta.env.VITE_ABLY_API_KEY;
 
 export const ParticipantView = () => {
