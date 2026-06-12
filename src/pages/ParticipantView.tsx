@@ -9,7 +9,7 @@ import type { Player, Question } from '../types';
 import { isProfane } from '../utils/profanityFilter';
 import { cn } from '../utils/cn';
 
-const BROKER_URL = 'wss://realtime.ably.io:443';
+const BROKER_URL = 'wss://realtime.ably.io:443/mqtt';
 const ABLY_API_KEY = import.meta.env.VITE_ABLY_API_KEY;
 
 export const ParticipantView = () => {
@@ -62,6 +62,7 @@ export const ParticipantView = () => {
       username: ABLY_API_KEY,
       password: '',
       clean: true,
+      format: 'json',
       keepalive: 30,
       reconnectPeriod: 2000,
       clientId: `curio_client_${Math.random().toString(36).substring(2, 9)}`
