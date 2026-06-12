@@ -57,15 +57,16 @@ export const ParticipantView = () => {
 
     // Verbindung zum performanten Cloud-Broker aufbauen
     const client = mqtt.connect(BROKER_URL, {
-      protocol: 'wss',
-      path: '/mqtt',
       username: ABLY_API_KEY,
       password: '',
       clean: true,
       format: 'json',
       keepalive: 30,
       reconnectPeriod: 2000,
-      clientId: `curio_client_${Math.random().toString(36).substring(2, 9)}`
+      clientId: `curio_client_${Math.random().toString(36).substring(2, 9)}`,
+      wsOptions: {
+    binaryType: 'string'
+      }
     } as any);
 
     clientRef.current = client;
