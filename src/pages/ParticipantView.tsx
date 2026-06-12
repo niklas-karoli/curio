@@ -9,7 +9,7 @@ import type { Player, Question } from '../types';
 import { isProfane } from '../utils/profanityFilter';
 import { cn } from '../utils/cn';
 
-const BROKER_URL = 'wss://realtime.ably.io:443/mqtt';
+const BROKER_URL = 'wss://realtime.ably.io:443';
 const ABLY_API_KEY = import.meta.env.VITE_ABLY_API_KEY;
 
 export const ParticipantView = () => {
@@ -58,13 +58,13 @@ export const ParticipantView = () => {
     // Verbindung zum performanten Cloud-Broker aufbauen
     const client = mqtt.connect(BROKER_URL, {
       protocol: 'wss',
+      path: '/mqtt',
       username: ABLY_API_KEY,
       password: '',
       clean: true,
       keepalive: 30,
       reconnectPeriod: 2000,
-      connectTimeout: 5000,
-      clientId: `curio_client_${myId}`
+      clientId: `curio_${isHost ? 'host' : 'client'}_${peerId}`
     });
 
     clientRef.current = client;
