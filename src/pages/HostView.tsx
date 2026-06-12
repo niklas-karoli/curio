@@ -88,7 +88,7 @@ export const HostView = () => {
       keepalive: 30,
       reconnectPeriod: 2000,
       clientId: `curio_host_${peerId}`
-    });
+    } as any);
 
     clientRef.current = client;
 
