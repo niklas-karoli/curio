@@ -9,7 +9,8 @@ import type { Player, Question } from '../types';
 import { isProfane } from '../utils/profanityFilter';
 import { cn } from '../utils/cn';
 
-const BROKER_URL = 'wss://broker.hivemq.com:8004/mqtt';
+const BROKER_URL = 'wss://realtime.ably.io:443';
+const ABLY_API_KEY = import.meta.env.VITE_ABLY_API_KEY;
 
 export const ParticipantView = () => {
   const savedData = JSON.parse(sessionStorage.getItem('curio-player') || '{}');
@@ -56,6 +57,9 @@ export const ParticipantView = () => {
 
     // Verbindung zum performanten Cloud-Broker aufbauen
     const client = mqtt.connect(BROKER_URL, {
+      username: ABLY_API_KEY,
+      password: '',
+      clean: true,
       keepalive: 30,
       reconnectPeriod: 2000,
       connectTimeout: 5000,
@@ -67,19 +71,19 @@ export const ParticipantView = () => {
 
     client.on('connect', () => {
       // Relevante Host-Kanäle abonnieren
-      client.subscribe(`curio/${cleanCode}/gameStart`, { qos: 0 });
-      client.subscribe(`curio/${cleanCode}/nextQuestion`, { qos: 0 });
-      client.subscribe(`curio/${cleanCode}/timesUp`, { qos: 0 });
-      client.subscribe(`curio/${cleanCode}/results`, { qos: 0 });
-      client.subscribe(`curio/${cleanCode}/kick`, { qos: 0 });
-      client.subscribe(`curio/${cleanCode}/welcome`, { qos: 0 });
+      client.subscribe(`channels/curio:${cleanCode}/gameStart`, { qos: 0 });
+      client.subscribe(`channels/curio:${cleanCode}/nextQuestion`, { qos: 0 });
+      client.subscribe(`channels/curio:${cleanCode}/timesUp`, { qos: 0 });
+      client.subscribe(`channels/curio:${cleanCode}/results`, { qos: 0 });
+      client.subscribe(`channels/curio:${cleanCode}/kick`, { qos: 0 });
+      client.subscribe(`channels/curio:${cleanCode}/welcome`, { qos: 0 });
 
       // Dem Host direkt signalisieren, dass wir da sind
       const joinPayload = {
         peerId: myId,
         data: { name, avatar }
       };
-      client.publish(`curio/${cleanCode}/join`, JSON.stringify(joinPayload), { qos: 0, retain: false });
+      client.publish(`channels/curio:${cleanCode}/join`, JSON.stringify(joinPayload), { qos: 0, retain: false });
     });
 
     client.on('message', (topic, message) => {
@@ -138,7 +142,7 @@ export const ParticipantView = () => {
     };
 
     clientRef.current.publish(
-      `curio/${roomCode.toUpperCase()}/submitAnswer`,
+      `channels/curio:${roomCode.trim().toUpperCase()}/submitAnswer`,
       JSON.stringify(answerPayload),
       { qos: 0, retain: false }
     );
