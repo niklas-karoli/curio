@@ -66,7 +66,7 @@ export const ParticipantView = () => {
       keepalive: 30,
       reconnectPeriod: 2000,
       clientId: `curio_client_${Math.random().toString(36).substring(2, 9)}`
-    });
+    } as any);
 
     clientRef.current = client;
     setStatus('waiting');
