@@ -79,6 +79,7 @@ export const HostView = () => {
 
     // Aggressive Reconnect- und Keepalive-Kofiguration für instabile Schul-WLANs
     const client = mqtt.connect(BROKER_URL, {
+      protocol: 'wss',
       username: ABLY_API_KEY,
       password: '',
       clean: true,
